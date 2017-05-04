@@ -7,7 +7,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"syscall"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/cli/cli"
@@ -21,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"golang.org/x/net/context"
+	"golang.org/x/sys/unix"
 )
 
 type runOptions struct {
@@ -288,7 +288,7 @@ func runStartContainerErr(err error) error {
 		strings.Contains(trimmedErr, "no such file or directory") ||
 		strings.Contains(trimmedErr, "system cannot find the file specified") {
 		statusError = cli.StatusError{StatusCode: 127}
-	} else if strings.Contains(trimmedErr, syscall.EACCES.Error()) {
+	} else if strings.Contains(trimmedErr, unix.EACCES.Error()) {
 		statusError = cli.StatusError{StatusCode: 126}
 	}
 

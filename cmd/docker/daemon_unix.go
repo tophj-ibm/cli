@@ -8,9 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
 )
 
 const daemonBinary = "dockerd"
@@ -42,7 +42,7 @@ func execDaemon(args []string) error {
 		return err
 	}
 
-	return syscall.Exec(
+	return unix.Exec(
 		binaryPath,
 		append([]string{daemonBinary}, args...),
 		os.Environ())
