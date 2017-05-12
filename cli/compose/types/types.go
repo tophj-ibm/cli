@@ -18,7 +18,6 @@ var UnsupportedProperties = []string{
 	"mac_address",
 	"network_mode",
 	"privileged",
-	"read_only",
 	"restart",
 	"security_opt",
 	"shm_size",
@@ -208,6 +207,12 @@ type RestartPolicy struct {
 // Placement constraints for the service
 type Placement struct {
 	Constraints []string
+	Preferences []PlacementPreferences
+}
+
+// PlacementPreferences is the preferences for a service placement
+type PlacementPreferences struct {
+	Spread string
 }
 
 // ServiceNetworkConfig is the network configuration for a service

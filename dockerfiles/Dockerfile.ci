@@ -19,9 +19,11 @@ RUN     go get github.com/mitchellh/gox && \
         cp /go/bin/gox /usr/bin && \
         rm -rf /go/src/* /go/pkg/* /go/bin/*
 
+RUN     go get github.com/jteeuwen/go-bindata/go-bindata && \
+        cp /go/bin/go-bindata /usr/bin && \
+        rm -rf /go/src/* /go/pkg/* /go/bin/*
+
 COPY    . /go/src/github.com/docker/cli
 
 ENV     CGO_ENABLED=0
 WORKDIR /go/src/github.com/docker/cli
-
-CMD     ["make", "ci"]

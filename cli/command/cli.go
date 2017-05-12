@@ -5,18 +5,17 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 
+	"github.com/docker/cli/cli"
 	cliconfig "github.com/docker/cli/cli/config"
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/cli/config/credentials"
 	cliflags "github.com/docker/cli/cli/flags"
-	"github.com/docker/cli/client"
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/versions"
-	"github.com/docker/docker/dockerversion"
+	"github.com/docker/docker/client"
 	dopts "github.com/docker/docker/opts"
 	"github.com/docker/go-connections/sockets"
 	"github.com/docker/go-connections/tlsconfig"
@@ -51,7 +50,6 @@ type DockerCli struct {
 	in             *InStream
 	out            *OutStream
 	err            io.Writer
-	keyFile        string
 	client         client.APIClient
 	defaultVersion string
 	server         ServerInfo
@@ -88,10 +86,12 @@ func (cli *DockerCli) In() *InStream {
 }
 
 // ShowHelp shows the command help.
-func (cli *DockerCli) ShowHelp(cmd *cobra.Command, args []string) error {
-	cmd.SetOutput(cli.err)
-	cmd.HelpFunc()(cmd, args)
-	return nil
+func ShowHelp(err io.Writer) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		cmd.SetOutput(err)
+		cmd.HelpFunc()(cmd, args)
+		return nil
+	}
 }
 
 // ConfigFile returns the ConfigFile
@@ -186,12 +186,6 @@ func (cli *DockerCli) Initialize(opts *cliflags.ClientOptions) error {
 	}
 
 	cli.defaultVersion = cli.client.ClientVersion()
-
-	if opts.Common.TrustKey == "" {
-		cli.keyFile = filepath.Join(cliconfig.Dir(), cliflags.DefaultTrustKeyFile)
-	} else {
-		cli.keyFile = opts.Common.TrustKey
-	}
 
 	if ping, err := cli.client.Ping(context.Background()); err == nil {
 		cli.server = ServerInfo{
@@ -306,5 +300,5 @@ func newHTTPClient(host string, tlsOptions *tlsconfig.Options) (*http.Client, er
 
 // UserAgent returns the user agent string used for making API requests
 func UserAgent() string {
-	return "Docker-Client/" + dockerversion.Version + " (" + runtime.GOOS + ")"
+	return "Docker-Client/" + cli.Version + " (" + runtime.GOOS + ")"
 }

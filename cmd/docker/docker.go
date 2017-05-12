@@ -13,9 +13,8 @@ import (
 	cliconfig "github.com/docker/cli/cli/config"
 	"github.com/docker/cli/cli/debug"
 	cliflags "github.com/docker/cli/cli/flags"
-	"github.com/docker/cli/client"
 	"github.com/docker/docker/api/types/versions"
-	"github.com/docker/docker/dockerversion"
+	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/term"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -37,7 +36,7 @@ func newDockerCommand(dockerCli *command.DockerCli) *cobra.Command {
 				showVersion()
 				return nil
 			}
-			return dockerCli.ShowHelp(cmd, args)
+			return command.ShowHelp(dockerCli.Err())(cmd, args)
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// daemon command is special, we redirect directly to another binary
@@ -184,7 +183,7 @@ func main() {
 }
 
 func showVersion() {
-	fmt.Printf("Docker version %s, build %s\n", dockerversion.Version, dockerversion.GitCommit)
+	fmt.Printf("Docker version %s, build %s\n", cli.Version, cli.GitCommit)
 }
 
 func dockerPreRun(opts *cliflags.ClientOptions) {
