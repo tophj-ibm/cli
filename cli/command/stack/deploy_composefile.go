@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -11,16 +12,16 @@ import (
 	"github.com/docker/cli/cli/compose/convert"
 	"github.com/docker/cli/cli/compose/loader"
 	composetypes "github.com/docker/cli/cli/compose/types"
-	apiclient "github.com/docker/cli/client"
-	dockerclient "github.com/docker/cli/client"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/swarm"
+	apiclient "github.com/docker/docker/client"
+	dockerclient "github.com/docker/docker/client"
 	"github.com/pkg/errors"
 	"golang.org/x/net/context"
 )
 
-func deployCompose(ctx context.Context, dockerCli *command.DockerCli, opts deployOptions) error {
-	configDetails, err := getConfigDetails(opts)
+func deployCompose(ctx context.Context, dockerCli command.Cli, opts deployOptions) error {
+	configDetails, err := getConfigDetails(opts.composefile)
 	if err != nil {
 		return err
 	}
@@ -108,16 +109,16 @@ func propertyWarnings(properties map[string]string) string {
 	return strings.Join(msgs, "\n\n")
 }
 
-func getConfigDetails(opts deployOptions) (composetypes.ConfigDetails, error) {
+func getConfigDetails(composefile string) (composetypes.ConfigDetails, error) {
 	var details composetypes.ConfigDetails
-	var err error
 
-	details.WorkingDir, err = os.Getwd()
+	absPath, err := filepath.Abs(composefile)
 	if err != nil {
 		return details, err
 	}
+	details.WorkingDir = filepath.Dir(absPath)
 
-	configFile, err := getConfigFile(opts.composefile)
+	configFile, err := getConfigFile(composefile)
 	if err != nil {
 		return details, err
 	}
@@ -160,7 +161,7 @@ func getConfigFile(filename string) (*composetypes.ConfigFile, error) {
 
 func validateExternalNetworks(
 	ctx context.Context,
-	dockerCli *command.DockerCli,
+	dockerCli command.Cli,
 	externalNetworks []string) error {
 	client := dockerCli.Client()
 
@@ -182,7 +183,7 @@ func validateExternalNetworks(
 
 func createSecrets(
 	ctx context.Context,
-	dockerCli *command.DockerCli,
+	dockerCli command.Cli,
 	namespace convert.Namespace,
 	secrets []swarm.SecretSpec,
 ) error {
@@ -209,7 +210,7 @@ func createSecrets(
 
 func createNetworks(
 	ctx context.Context,
-	dockerCli *command.DockerCli,
+	dockerCli command.Cli,
 	namespace convert.Namespace,
 	networks map[string]types.NetworkCreate,
 ) error {
@@ -246,7 +247,7 @@ func createNetworks(
 
 func deployServices(
 	ctx context.Context,
-	dockerCli *command.DockerCli,
+	dockerCli command.Cli,
 	services map[string]swarm.ServiceSpec,
 	namespace convert.Namespace,
 	sendAuth bool,

@@ -9,10 +9,10 @@ import (
 
 	servicecli "github.com/docker/cli/cli/command/service"
 	composetypes "github.com/docker/cli/cli/compose/types"
-	"github.com/docker/cli/client"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/versions"
+	"github.com/docker/docker/client"
 	"github.com/docker/docker/opts"
 	runconfigopts "github.com/docker/docker/runconfig/opts"
 	"github.com/pkg/errors"
@@ -129,12 +129,14 @@ func convertService(
 				TTY:             service.Tty,
 				OpenStdin:       service.StdinOpen,
 				Secrets:         secrets,
+				ReadOnly:        service.ReadOnly,
 			},
 			LogDriver:     logDriver,
 			Resources:     resources,
 			RestartPolicy: restartPolicy,
 			Placement: &swarm.Placement{
 				Constraints: service.Deploy.Placement.Constraints,
+				Preferences: getPlacementPreference(service.Deploy.Placement.Preferences),
 			},
 		},
 		EndpointSpec: endpoint,
@@ -155,6 +157,19 @@ func convertService(
 		serviceSpec.TaskTemplate.Networks = networks
 	}
 	return serviceSpec, nil
+}
+
+func getPlacementPreference(preferences []composetypes.PlacementPreferences) []swarm.PlacementPreference {
+	result := []swarm.PlacementPreference{}
+	for _, preference := range preferences {
+		spreadDescriptor := preference.Spread
+		result = append(result, swarm.PlacementPreference{
+			Spread: &swarm.SpreadOver{
+				SpreadDescriptor: spreadDescriptor,
+			},
+		})
+	}
+	return result
 }
 
 func sortStrings(strs []string) []string {

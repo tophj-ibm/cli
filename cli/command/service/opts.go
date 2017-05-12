@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/cli/client"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/client"
 	"github.com/docker/docker/opts"
 	runconfigopts "github.com/docker/docker/runconfig/opts"
 	"github.com/docker/swarmkit/api"
@@ -593,7 +593,7 @@ func (opts *serviceOptions) ToStopGracePeriod(flags *pflag.FlagSet) *time.Durati
 	return nil
 }
 
-func (opts *serviceOptions) ToService(ctx context.Context, apiClient client.APIClient, flags *pflag.FlagSet) (swarm.ServiceSpec, error) {
+func (opts *serviceOptions) ToService(ctx context.Context, apiClient client.NetworkAPIClient, flags *pflag.FlagSet) (swarm.ServiceSpec, error) {
 	var service swarm.ServiceSpec
 
 	envVariables, err := runconfigopts.ReadKVStrings(opts.envFile.GetAll(), opts.env.GetAll())
@@ -780,7 +780,8 @@ func addServiceFlags(flags *pflag.FlagSet, opts *serviceOptions, defaultFlagValu
 	flags.StringVar(&opts.update.order, flagUpdateOrder, "", flagDesc(flagUpdateOrder, `Update order ("start-first"|"stop-first")`))
 	flags.SetAnnotation(flagUpdateOrder, "version", []string{"1.29"})
 
-	flags.Uint64Var(&opts.rollback.parallelism, flagRollbackParallelism, defaultFlagValues.getUint64(flagRollbackParallelism), "Maximum number of tasks rolled back simultaneously (0 to roll back all at once)")
+	flags.Uint64Var(&opts.rollback.parallelism, flagRollbackParallelism, defaultFlagValues.getUint64(flagRollbackParallelism),
+		"Maximum number of tasks rolled back simultaneously (0 to roll back all at once)")
 	flags.SetAnnotation(flagRollbackParallelism, "version", []string{"1.28"})
 	flags.DurationVar(&opts.rollback.delay, flagRollbackDelay, 0, flagDesc(flagRollbackDelay, "Delay between task rollbacks (ns|us|ms|s|m|h)"))
 	flags.SetAnnotation(flagRollbackDelay, "version", []string{"1.28"})
@@ -802,13 +803,13 @@ func addServiceFlags(flags *pflag.FlagSet, opts *serviceOptions, defaultFlagValu
 
 	flags.StringVar(&opts.healthcheck.cmd, flagHealthCmd, "", "Command to run to check health")
 	flags.SetAnnotation(flagHealthCmd, "version", []string{"1.25"})
-	flags.Var(&opts.healthcheck.interval, flagHealthInterval, "Time between running the check (ns|us|ms|s|m|h)")
+	flags.Var(&opts.healthcheck.interval, flagHealthInterval, "Time between running the check (ms|s|m|h)")
 	flags.SetAnnotation(flagHealthInterval, "version", []string{"1.25"})
-	flags.Var(&opts.healthcheck.timeout, flagHealthTimeout, "Maximum time to allow one check to run (ns|us|ms|s|m|h)")
+	flags.Var(&opts.healthcheck.timeout, flagHealthTimeout, "Maximum time to allow one check to run (ms|s|m|h)")
 	flags.SetAnnotation(flagHealthTimeout, "version", []string{"1.25"})
 	flags.IntVar(&opts.healthcheck.retries, flagHealthRetries, 0, "Consecutive failures needed to report unhealthy")
 	flags.SetAnnotation(flagHealthRetries, "version", []string{"1.25"})
-	flags.Var(&opts.healthcheck.startPeriod, flagHealthStartPeriod, "Start period for the container to initialize before counting retries towards unstable (ns|us|ms|s|m|h)")
+	flags.Var(&opts.healthcheck.startPeriod, flagHealthStartPeriod, "Start period for the container to initialize before counting retries towards unstable (ms|s|m|h)")
 	flags.SetAnnotation(flagHealthStartPeriod, "version", []string{"1.29"})
 	flags.BoolVar(&opts.healthcheck.noHealthcheck, flagNoHealthcheck, false, "Disable any container-specified HEALTHCHECK")
 	flags.SetAnnotation(flagNoHealthcheck, "version", []string{"1.25"})

@@ -4,14 +4,13 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
-	"path/filepath"
 	"regexp"
 	"runtime"
-	"time"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
@@ -20,14 +19,11 @@ import (
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/builder/dockerignore"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/fileutils"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
-	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/pkg/urlutil"
 	runconfigopts "github.com/docker/docker/runconfig/opts"
 	units "github.com/docker/go-units"
@@ -65,6 +61,19 @@ type buildOptions struct {
 	networkMode    string
 	squash         bool
 	target         string
+	imageIDFile    string
+}
+
+// dockerfileFromStdin returns true when the user specified that the Dockerfile
+// should be read from stdin instead of a file
+func (o buildOptions) dockerfileFromStdin() bool {
+	return o.dockerfileName == "-"
+}
+
+// contextFromStdin returns true when the user specified that the build context
+// should be read from stdin
+func (o buildOptions) contextFromStdin() bool {
+	return o.context == "-"
 }
 
 // NewBuildCommand creates a new `docker build` command
@@ -117,6 +126,7 @@ func NewBuildCommand(dockerCli *command.DockerCli) *cobra.Command {
 	flags.SetAnnotation("network", "version", []string{"1.25"})
 	flags.Var(&options.extraHosts, "add-host", "Add a custom host-to-IP mapping (host:ip)")
 	flags.StringVar(&options.target, "target", "", "Set the target build stage to build.")
+	flags.StringVar(&options.imageIDFile, "iidfile", "", "Write the image ID to the file")
 
 	command.AddTrustVerificationFlags(flags)
 
@@ -143,6 +153,7 @@ func (out *lastProgressOutput) WriteProgress(prog progress.Progress) error {
 	return out.output.WriteProgress(prog)
 }
 
+// nolint: gocyclo
 func runBuild(dockerCli *command.DockerCli, options buildOptions) error {
 	var (
 		buildCtx      io.ReadCloser
@@ -155,6 +166,13 @@ func runBuild(dockerCli *command.DockerCli, options buildOptions) error {
 		buildBuff     io.Writer
 	)
 
+	if options.dockerfileFromStdin() {
+		if options.contextFromStdin() {
+			return errors.New("invalid argument: can't use stdin for both build context and dockerfile")
+		}
+		dockerfileCtx = dockerCli.In()
+	}
+
 	specifiedContext := options.context
 	progBuff = dockerCli.Out()
 	buildBuff = dockerCli.Out()
@@ -162,16 +180,15 @@ func runBuild(dockerCli *command.DockerCli, options buildOptions) error {
 		progBuff = bytes.NewBuffer(nil)
 		buildBuff = bytes.NewBuffer(nil)
 	}
-
-	if options.dockerfileName == "-" {
-		if specifiedContext == "-" {
-			return errors.New("invalid argument: can't use stdin for both build context and dockerfile")
+	if options.imageIDFile != "" {
+		// Avoid leaving a stale file if we eventually fail
+		if err := os.Remove(options.imageIDFile); err != nil && !os.IsNotExist(err) {
+			return errors.Wrap(err, "Removing image ID file")
 		}
-		dockerfileCtx = dockerCli.In()
 	}
 
 	switch {
-	case specifiedContext == "-":
+	case options.contextFromStdin():
 		buildCtx, relDockerfile, err = build.GetContextFromReader(dockerCli.In(), options.dockerfileName)
 	case isLocalDir(specifiedContext):
 		contextDir, relDockerfile, err = build.GetContextFromLocalDir(specifiedContext, options.dockerfileName)
@@ -196,44 +213,22 @@ func runBuild(dockerCli *command.DockerCli, options buildOptions) error {
 	}
 
 	if buildCtx == nil {
+		excludes, err := build.ReadDockerignore(contextDir)
+		if err != nil {
+			return err
+		}
+
+		if err := build.ValidateContextDirectory(contextDir, excludes); err != nil {
+			return errors.Errorf("error checking context: '%s'.", err)
+		}
+
 		// And canonicalize dockerfile name to a platform-independent one
 		relDockerfile, err = archive.CanonicalTarNameForPath(relDockerfile)
 		if err != nil {
 			return errors.Errorf("cannot canonicalize dockerfile path %s: %v", relDockerfile, err)
 		}
 
-		f, err := os.Open(filepath.Join(contextDir, ".dockerignore"))
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		defer f.Close()
-
-		var excludes []string
-		if err == nil {
-			excludes, err = dockerignore.ReadAll(f)
-			if err != nil {
-				return err
-			}
-		}
-
-		if err := build.ValidateContextDirectory(contextDir, excludes); err != nil {
-			return errors.Errorf("Error checking context: '%s'.", err)
-		}
-
-		// If .dockerignore mentions .dockerignore or the Dockerfile then make
-		// sure we send both files over to the daemon because Dockerfile is,
-		// obviously, needed no matter what, and .dockerignore is needed to know
-		// if either one needs to be removed. The daemon will remove them
-		// if necessary, after it parses the Dockerfile. Ignore errors here, as
-		// they will have been caught by validateContextDirectory above.
-		// Excludes are used instead of includes to maintain the order of files
-		// in the archive.
-		if keep, _ := fileutils.Matches(".dockerignore", excludes); keep {
-			excludes = append(excludes, "!.dockerignore")
-		}
-		if keep, _ := fileutils.Matches(relDockerfile, excludes); keep && dockerfileCtx == nil {
-			excludes = append(excludes, "!"+relDockerfile)
-		}
+		excludes = build.TrimBuildFilesFromExcludes(excludes, relDockerfile, options.dockerfileFromStdin())
 
 		compression := archive.Uncompressed
 		if options.compress {
@@ -250,7 +245,7 @@ func runBuild(dockerCli *command.DockerCli, options buildOptions) error {
 
 	// replace Dockerfile if added dynamically
 	if dockerfileCtx != nil {
-		buildCtx, relDockerfile, err = addDockerfileToBuildContext(dockerfileCtx, buildCtx)
+		buildCtx, relDockerfile, err = build.AddDockerfileToBuildContext(dockerfileCtx, buildCtx)
 		if err != nil {
 			return err
 		}
@@ -269,7 +264,7 @@ func runBuild(dockerCli *command.DockerCli, options buildOptions) error {
 	}
 
 	// Setup an upload progress bar
-	progressOutput := streamformatter.NewStreamFormatter().NewProgressOutput(progBuff, true)
+	progressOutput := streamformatter.NewProgressOutput(progBuff)
 	if !dockerCli.Out().IsTerminal() {
 		progressOutput = &lastProgressOutput{output: progressOutput}
 	}
@@ -316,7 +311,17 @@ func runBuild(dockerCli *command.DockerCli, options buildOptions) error {
 	}
 	defer response.Body.Close()
 
-	err = jsonmessage.DisplayJSONMessagesStream(response.Body, buildBuff, dockerCli.Out().FD(), dockerCli.Out().IsTerminal(), nil)
+	imageID := ""
+	aux := func(auxJSON *json.RawMessage) {
+		var result types.BuildResult
+		if err := json.Unmarshal(*auxJSON, &result); err != nil {
+			fmt.Fprintf(dockerCli.Err(), "Failed to parse aux message: %s", err)
+		} else {
+			imageID = result.ID
+		}
+	}
+
+	err = jsonmessage.DisplayJSONMessagesStream(response.Body, buildBuff, dockerCli.Out().FD(), dockerCli.Out().IsTerminal(), aux)
 	if err != nil {
 		if jerr, ok := err.(*jsonmessage.JSONError); ok {
 			// If no error code is set, default to 1
@@ -344,9 +349,18 @@ func runBuild(dockerCli *command.DockerCli, options buildOptions) error {
 	// Everything worked so if -q was provided the output from the daemon
 	// should be just the image ID and we'll print that to stdout.
 	if options.quiet {
-		fmt.Fprintf(dockerCli.Out(), "%s", buildBuff)
+		imageID = fmt.Sprintf("%s", buildBuff)
+		fmt.Fprintf(dockerCli.Out(), imageID)
 	}
 
+	if options.imageIDFile != "" {
+		if imageID == "" {
+			return errors.Errorf("Server did not provide an image ID. Cannot write %s", options.imageIDFile)
+		}
+		if err := ioutil.WriteFile(options.imageIDFile, []byte(imageID), 0666); err != nil {
+			return err
+		}
+	}
 	if command.IsTrusted() {
 		// Since the build was successful, now we must tag any of the resolved
 		// images from the above Dockerfile rewrite.
@@ -358,50 +372,6 @@ func runBuild(dockerCli *command.DockerCli, options buildOptions) error {
 	}
 
 	return nil
-}
-
-func addDockerfileToBuildContext(dockerfileCtx io.ReadCloser, buildCtx io.ReadCloser) (io.ReadCloser, string, error) {
-	file, err := ioutil.ReadAll(dockerfileCtx)
-	dockerfileCtx.Close()
-	if err != nil {
-		return nil, "", err
-	}
-	now := time.Now()
-	hdrTmpl := &tar.Header{
-		Mode:       0600,
-		Uid:        0,
-		Gid:        0,
-		ModTime:    now,
-		Typeflag:   tar.TypeReg,
-		AccessTime: now,
-		ChangeTime: now,
-	}
-	randomName := ".dockerfile." + stringid.GenerateRandomID()[:20]
-
-	buildCtx = archive.ReplaceFileTarWrapper(buildCtx, map[string]archive.TarModifierFunc{
-		// Add the dockerfile with a random filename
-		randomName: func(_ string, h *tar.Header, content io.Reader) (*tar.Header, []byte, error) {
-			return hdrTmpl, file, nil
-		},
-		// Update .dockerignore to include the random filename
-		".dockerignore": func(_ string, h *tar.Header, content io.Reader) (*tar.Header, []byte, error) {
-			if h == nil {
-				h = hdrTmpl
-			}
-
-			b := &bytes.Buffer{}
-			if content != nil {
-				if _, err := b.ReadFrom(content); err != nil {
-					return nil, nil, err
-				}
-			} else {
-				b.WriteString(".dockerignore")
-			}
-			b.WriteString("\n" + randomName + "\n")
-			return h, b.Bytes(), nil
-		},
-	})
-	return buildCtx, randomName, nil
 }
 
 func isLocalDir(c string) bool {

@@ -2,6 +2,7 @@ package system
 
 import (
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"github.com/docker/cli/cli/debug"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/templates"
 	"github.com/docker/go-units"
 	"github.com/spf13/cobra"
@@ -54,14 +54,15 @@ func runInfo(dockerCli *command.DockerCli, opts *infoOptions) error {
 	return formatInfo(dockerCli, info, opts.format)
 }
 
+// nolint: gocyclo
 func prettyPrintInfo(dockerCli *command.DockerCli, info types.Info) error {
 	fmt.Fprintf(dockerCli.Out(), "Containers: %d\n", info.Containers)
 	fmt.Fprintf(dockerCli.Out(), " Running: %d\n", info.ContainersRunning)
 	fmt.Fprintf(dockerCli.Out(), " Paused: %d\n", info.ContainersPaused)
 	fmt.Fprintf(dockerCli.Out(), " Stopped: %d\n", info.ContainersStopped)
 	fmt.Fprintf(dockerCli.Out(), "Images: %d\n", info.Images)
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "Server Version: %s\n", info.ServerVersion)
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "Storage Driver: %s\n", info.Driver)
+	fprintfIfNotEmpty(dockerCli.Out(), "Server Version: %s\n", info.ServerVersion)
+	fprintfIfNotEmpty(dockerCli.Out(), "Storage Driver: %s\n", info.Driver)
 	if info.DriverStatus != nil {
 		for _, pair := range info.DriverStatus {
 			fmt.Fprintf(dockerCli.Out(), " %s: %s\n", pair[0], pair[1])
@@ -73,8 +74,8 @@ func prettyPrintInfo(dockerCli *command.DockerCli, info types.Info) error {
 			fmt.Fprintf(dockerCli.Out(), "%s: %s\n", pair[0], pair[1])
 		}
 	}
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "Logging Driver: %s\n", info.LoggingDriver)
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "Cgroup Driver: %s\n", info.CgroupDriver)
+	fprintfIfNotEmpty(dockerCli.Out(), "Logging Driver: %s\n", info.LoggingDriver)
+	fprintfIfNotEmpty(dockerCli.Out(), "Cgroup Driver: %s\n", info.CgroupDriver)
 
 	fmt.Fprintf(dockerCli.Out(), "Plugins: \n")
 	fmt.Fprintf(dockerCli.Out(), " Volume:")
@@ -89,6 +90,10 @@ func prettyPrintInfo(dockerCli *command.DockerCli, info types.Info) error {
 		fmt.Fprintf(dockerCli.Out(), " %s", strings.Join(info.Plugins.Authorization, " "))
 		fmt.Fprintf(dockerCli.Out(), "\n")
 	}
+
+	fmt.Fprintf(dockerCli.Out(), " Log:")
+	fmt.Fprintf(dockerCli.Out(), " %s", strings.Join(info.Plugins.Log, " "))
+	fmt.Fprintf(dockerCli.Out(), "\n")
 
 	fmt.Fprintf(dockerCli.Out(), "Swarm: %v\n", info.Swarm.LocalNodeState)
 	if info.Swarm.LocalNodeState != swarm.LocalNodeStateInactive && info.Swarm.LocalNodeState != swarm.LocalNodeStateLocked {
@@ -191,14 +196,14 @@ func prettyPrintInfo(dockerCli *command.DockerCli, info types.Info) error {
 		fmt.Fprintf(dockerCli.Out(), "Default Isolation: %v\n", info.Isolation)
 	}
 
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "Kernel Version: %s\n", info.KernelVersion)
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "Operating System: %s\n", info.OperatingSystem)
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "OSType: %s\n", info.OSType)
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "Architecture: %s\n", info.Architecture)
+	fprintfIfNotEmpty(dockerCli.Out(), "Kernel Version: %s\n", info.KernelVersion)
+	fprintfIfNotEmpty(dockerCli.Out(), "Operating System: %s\n", info.OperatingSystem)
+	fprintfIfNotEmpty(dockerCli.Out(), "OSType: %s\n", info.OSType)
+	fprintfIfNotEmpty(dockerCli.Out(), "Architecture: %s\n", info.Architecture)
 	fmt.Fprintf(dockerCli.Out(), "CPUs: %d\n", info.NCPU)
 	fmt.Fprintf(dockerCli.Out(), "Total Memory: %s\n", units.BytesSize(float64(info.MemTotal)))
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "Name: %s\n", info.Name)
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "ID: %s\n", info.ID)
+	fprintfIfNotEmpty(dockerCli.Out(), "Name: %s\n", info.Name)
+	fprintfIfNotEmpty(dockerCli.Out(), "ID: %s\n", info.ID)
 	fmt.Fprintf(dockerCli.Out(), "Docker Root Dir: %s\n", info.DockerRootDir)
 	fmt.Fprintf(dockerCli.Out(), "Debug Mode (client): %v\n", debug.IsEnabled())
 	fmt.Fprintf(dockerCli.Out(), "Debug Mode (server): %v\n", info.Debug)
@@ -210,9 +215,9 @@ func prettyPrintInfo(dockerCli *command.DockerCli, info types.Info) error {
 		fmt.Fprintf(dockerCli.Out(), " EventsListeners: %d\n", info.NEventsListener)
 	}
 
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "Http Proxy: %s\n", info.HTTPProxy)
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "Https Proxy: %s\n", info.HTTPSProxy)
-	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "No Proxy: %s\n", info.NoProxy)
+	fprintfIfNotEmpty(dockerCli.Out(), "Http Proxy: %s\n", info.HTTPProxy)
+	fprintfIfNotEmpty(dockerCli.Out(), "Https Proxy: %s\n", info.HTTPSProxy)
+	fprintfIfNotEmpty(dockerCli.Out(), "No Proxy: %s\n", info.NoProxy)
 
 	if info.IndexServerAddress != "" {
 		u := dockerCli.ConfigFile().AuthConfigs[info.IndexServerAddress].Username
@@ -325,7 +330,9 @@ func printStorageDriverWarnings(dockerCli *command.DockerCli, info types.Info) {
 
 	for _, pair := range info.DriverStatus {
 		if pair[0] == "Data loop file" {
-			fmt.Fprintf(dockerCli.Err(), "WARNING: %s: usage of loopback devices is strongly discouraged for production use.\n         Use `--storage-opt dm.thinpooldev` to specify a custom block storage device.\n", info.Driver)
+			fmt.Fprintf(dockerCli.Err(), "WARNING: %s: usage of loopback devices is "+
+				"strongly discouraged for production use.\n         "+
+				"Use `--storage-opt dm.thinpooldev` to specify a custom block storage device.\n", info.Driver)
 		}
 		if pair[0] == "Supports d_type" && pair[1] == "false" {
 			backingFs := getBackingFs(info)
@@ -362,4 +369,11 @@ func formatInfo(dockerCli *command.DockerCli, info types.Info, format string) er
 	err = tmpl.Execute(dockerCli.Out(), info)
 	dockerCli.Out().Write([]byte{'\n'})
 	return err
+}
+
+func fprintfIfNotEmpty(w io.Writer, format, value string) (int, error) {
+	if value != "" {
+		return fmt.Fprintf(w, format, value)
+	}
+	return 0, nil
 }

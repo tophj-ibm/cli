@@ -12,9 +12,9 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/idresolver"
-	"github.com/docker/cli/client"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/pkg/errors"
@@ -93,6 +93,14 @@ func runLogs(dockerCli *command.DockerCli, opts *logsOptions) error {
 			return err
 		}
 		task, _, err := cli.TaskInspectWithRaw(ctx, opts.target)
+		if err != nil {
+			if client.IsErrTaskNotFound(err) {
+				// if the task isn't found, rewrite the error to be clear
+				// that we looked for services AND tasks and found none
+				err = fmt.Errorf("no such task or service")
+			}
+			return err
+		}
 		tty = task.Spec.ContainerSpec.TTY
 		// TODO(dperny) hot fix until we get a nice details system squared away,
 		// ignores details (including task context) if we have a TTY log
@@ -104,15 +112,10 @@ func runLogs(dockerCli *command.DockerCli, opts *logsOptions) error {
 
 		responseBody, err = cli.TaskLogs(ctx, opts.target, options)
 		if err != nil {
-			if client.IsErrTaskNotFound(err) {
-				// if the task ALSO isn't found, rewrite the error to be clear
-				// that we looked for services AND tasks
-				err = fmt.Errorf("No such task or service")
-			}
 			return err
 		}
+
 		maxLength = getMaxLength(task.Slot)
-		responseBody, err = cli.TaskLogs(ctx, opts.target, options)
 	} else {
 		tty = service.Spec.TaskTemplate.ContainerSpec.TTY
 		// TODO(dperny) hot fix until we get a nice details system squared away,

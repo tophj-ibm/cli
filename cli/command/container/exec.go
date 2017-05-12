@@ -7,8 +7,8 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	apiclient "github.com/docker/cli/client"
 	"github.com/docker/docker/api/types"
+	apiclient "github.com/docker/docker/client"
 	options "github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/promise"
 	"github.com/spf13/cobra"
@@ -62,6 +62,7 @@ func NewExecCommand(dockerCli *command.DockerCli) *cobra.Command {
 	return cmd
 }
 
+// nolint: gocyclo
 func runExec(dockerCli *command.DockerCli, opts *execOptions, container string, execCmd []string) error {
 	execConfig, err := parseExec(opts, execCmd)
 	// just in case the ParseExec does not exit
@@ -79,6 +80,19 @@ func runExec(dockerCli *command.DockerCli, opts *execOptions, container string, 
 	ctx := context.Background()
 	client := dockerCli.Client()
 
+	// We need to check the tty _before_ we do the ContainerExecCreate, because
+	// otherwise if we error out we will leak execIDs on the server (and
+	// there's no easy way to clean those up). But also in order to make "not
+	// exist" errors take precedence we do a dummy inspect first.
+	if _, err := client.ContainerInspect(ctx, container); err != nil {
+		return err
+	}
+	if !execConfig.Detach {
+		if err := dockerCli.In().CheckTty(execConfig.AttachStdin, execConfig.Tty); err != nil {
+			return err
+		}
+	}
+
 	response, err := client.ContainerExecCreate(ctx, container, *execConfig)
 	if err != nil {
 		return err
@@ -90,12 +104,8 @@ func runExec(dockerCli *command.DockerCli, opts *execOptions, container string, 
 		return nil
 	}
 
-	//Temp struct for execStart so that we don't need to transfer all the execConfig
-	if !execConfig.Detach {
-		if err := dockerCli.In().CheckTty(execConfig.AttachStdin, execConfig.Tty); err != nil {
-			return err
-		}
-	} else {
+	// Temp struct for execStart so that we don't need to transfer all the execConfig.
+	if execConfig.Detach {
 		execStartCheck := types.ExecStartCheck{
 			Detach: execConfig.Detach,
 			Tty:    execConfig.Tty,

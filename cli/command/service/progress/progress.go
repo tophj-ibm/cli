@@ -8,10 +8,10 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/docker/cli/client"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
@@ -59,10 +59,11 @@ func stateToProgress(state swarm.TaskState, rollback bool) int64 {
 }
 
 // ServiceProgress outputs progress information for convergence of a service.
+// nolint: gocyclo
 func ServiceProgress(ctx context.Context, client client.APIClient, serviceID string, progressWriter io.WriteCloser) error {
 	defer progressWriter.Close()
 
-	progressOut := streamformatter.NewJSONStreamFormatter().NewProgressOutput(progressWriter, false)
+	progressOut := streamformatter.NewJSONProgressOutput(progressWriter, false)
 
 	sigint := make(chan os.Signal, 1)
 	signal.Notify(sigint, os.Interrupt)
@@ -240,6 +241,7 @@ type replicatedProgressUpdater struct {
 	done        bool
 }
 
+// nolint: gocyclo
 func (u *replicatedProgressUpdater) update(service swarm.Service, tasks []swarm.Task, activeNodes map[string]swarm.Node, rollback bool) (bool, error) {
 	if service.Spec.Mode.Replicated == nil || service.Spec.Mode.Replicated.Replicas == nil {
 		return false, errors.New("no replica count")

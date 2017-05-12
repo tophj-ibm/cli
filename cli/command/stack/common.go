@@ -4,10 +4,10 @@ import (
 	"golang.org/x/net/context"
 
 	"github.com/docker/cli/cli/compose/convert"
-	"github.com/docker/cli/client"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/client"
 	"github.com/docker/docker/opts"
 )
 
@@ -18,9 +18,7 @@ func getStackFilter(namespace string) filters.Args {
 }
 
 func getServiceFilter(namespace string) filters.Args {
-	filter := getStackFilter(namespace)
-	filter.Add("runtime", string(swarm.RuntimeContainer))
-	return filter
+	return getStackFilter(namespace)
 }
 
 func getStackFilterFromOpt(namespace string, opt opts.FilterOpt) filters.Args {
