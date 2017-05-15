@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io/ioutil"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -92,7 +93,7 @@ func TestSecretCreateWithLabels(t *testing.T) {
 				return types.SecretCreateResponse{}, errors.Errorf("expected name %q, got %q", name, spec.Name)
 			}
 
-			if !compareMap(spec.Labels, expectedLabels) {
+			if !reflect.DeepEqual(spec.Labels, expectedLabels) {
 				return types.SecretCreateResponse{}, errors.Errorf("expected labels %v, got %v", expectedLabels, spec.Labels)
 			}
 
@@ -108,20 +109,4 @@ func TestSecretCreateWithLabels(t *testing.T) {
 	cmd.Flags().Set("label", "lbl2=Label-bar")
 	assert.NoError(t, cmd.Execute())
 	assert.Equal(t, "ID-"+name, strings.TrimSpace(buf.String()))
-}
-
-func compareMap(actual map[string]string, expected map[string]string) bool {
-	if len(actual) != len(expected) {
-		return false
-	}
-	for key, value := range actual {
-		if expectedValue, ok := expected[key]; ok {
-			if expectedValue != value {
-				return false
-			}
-		} else {
-			return false
-		}
-	}
-	return true
 }
