@@ -37,7 +37,12 @@ func Services(
 		if err != nil {
 			return nil, errors.Wrapf(err, "service %s", service.Name)
 		}
-		serviceSpec, err := convertService(client.ClientVersion(), namespace, service, networks, volumes, secrets)
+		configs, err := convertServiceConfigObjs(client, namespace, service.Configs, config.Configs)
+		if err != nil {
+			return nil, errors.Wrapf(err, "service %s", service.Name)
+		}
+
+		serviceSpec, err := convertService(client.ClientVersion(), namespace, service, networks, volumes, secrets, configs)
 		if err != nil {
 			return nil, errors.Wrapf(err, "service %s", service.Name)
 		}
@@ -54,6 +59,7 @@ func convertService(
 	networkConfigs map[string]composetypes.NetworkConfig,
 	volumes map[string]composetypes.VolumeConfig,
 	secrets []*swarm.SecretReference,
+	configs []*swarm.ConfigReference,
 ) (swarm.ServiceSpec, error) {
 	name := namespace.Scope(service.Name)
 
@@ -98,6 +104,12 @@ func convertService(
 		return swarm.ServiceSpec{}, err
 	}
 
+	var privileges swarm.Privileges
+	privileges.CredentialSpec, err = convertCredentialSpec(service.CredentialSpec)
+	if err != nil {
+		return swarm.ServiceSpec{}, err
+	}
+
 	var logDriver *swarm.Driver
 	if service.Logging != nil {
 		logDriver = &swarm.Driver{
@@ -130,6 +142,7 @@ func convertService(
 				OpenStdin:       service.StdinOpen,
 				Secrets:         secrets,
 				ReadOnly:        service.ReadOnly,
+				Privileges:      &privileges,
 			},
 			LogDriver:     logDriver,
 			Resources:     resources,
@@ -268,6 +281,57 @@ func convertServiceSecrets(
 	}
 
 	return servicecli.ParseSecrets(client, refs)
+}
+
+// TODO: fix configs API so that ConfigsAPIClient is not required here
+func convertServiceConfigObjs(
+	client client.ConfigAPIClient,
+	namespace Namespace,
+	configs []composetypes.ServiceConfigObjConfig,
+	configSpecs map[string]composetypes.ConfigObjConfig,
+) ([]*swarm.ConfigReference, error) {
+	refs := []*swarm.ConfigReference{}
+	for _, config := range configs {
+		target := config.Target
+		if target == "" {
+			target = config.Source
+		}
+
+		configSpec, exists := configSpecs[config.Source]
+		if !exists {
+			return nil, errors.Errorf("undefined config %q", config.Source)
+		}
+
+		source := namespace.Scope(config.Source)
+		if configSpec.External.External {
+			source = configSpec.External.Name
+		}
+
+		uid := config.UID
+		gid := config.GID
+		if uid == "" {
+			uid = "0"
+		}
+		if gid == "" {
+			gid = "0"
+		}
+		mode := config.Mode
+		if mode == nil {
+			mode = uint32Ptr(0444)
+		}
+
+		refs = append(refs, &swarm.ConfigReference{
+			File: &swarm.ConfigReferenceFileTarget{
+				Name: target,
+				UID:  uid,
+				GID:  gid,
+				Mode: os.FileMode(*mode),
+			},
+			ConfigName: source,
+		})
+	}
+
+	return servicecli.ParseConfigs(client, refs)
 }
 
 func uint32Ptr(value uint32) *uint32 {
@@ -476,4 +540,18 @@ func convertDNSConfig(DNS []string, DNSSearch []string) (*swarm.DNSConfig, error
 		}, nil
 	}
 	return nil, nil
+}
+
+func convertCredentialSpec(spec composetypes.CredentialSpecConfig) (*swarm.CredentialSpec, error) {
+	if spec.File == "" && spec.Registry == "" {
+		return nil, nil
+	}
+	if spec.File != "" && spec.Registry != "" {
+		return nil, errors.New("Invalid credential spec - must provide one of `File` or `Registry`")
+	}
+
+	return &swarm.CredentialSpec{
+		File:     spec.File,
+		Registry: spec.Registry,
+	}, nil
 }
