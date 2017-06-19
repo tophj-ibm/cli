@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http/httputil"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -16,7 +17,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/pkg/promise"
 	"github.com/docker/docker/pkg/signal"
-	"github.com/docker/libnetwork/resolvconf/dns"
+	"github.com/docker/docker/pkg/term"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -76,11 +77,23 @@ func warnOnOomKillDisable(hostConfig container.HostConfig, stderr io.Writer) {
 // they are trying to set a DNS to a localhost address
 func warnOnLocalhostDNS(hostConfig container.HostConfig, stderr io.Writer) {
 	for _, dnsIP := range hostConfig.DNS {
-		if dns.IsLocalhost(dnsIP) {
+		if isLocalhost(dnsIP) {
 			fmt.Fprintf(stderr, "WARNING: Localhost DNS setting (--dns=%s) may fail in containers.\n", dnsIP)
 			return
 		}
 	}
+}
+
+// IPLocalhost is a regex pattern for IPv4 or IPv6 loopback range.
+const ipLocalhost = `((127\.([0-9]{1,3}\.){2}[0-9]{1,3})|(::1)$)`
+
+var localhostIPRegexp = regexp.MustCompile(ipLocalhost)
+
+// IsLocalhost returns true if ip matches the localhost IP regular expression.
+// Used for determining if nameserver settings are being passed which are
+// localhost addresses
+func isLocalhost(ip string) bool {
+	return localhostIPRegexp.MatchString(ip)
 }
 
 func runRun(dockerCli *command.DockerCli, flags *pflag.FlagSet, opts *runOptions, copts *containerOptions) error {
@@ -175,8 +188,8 @@ func runContainer(dockerCli *command.DockerCli, opts *runOptions, copts *contain
 
 	//start the container
 	if err := client.ContainerStart(ctx, createResponse.ID, types.ContainerStartOptions{}); err != nil {
-		// If we have holdHijackedConnection, we should notify
-		// holdHijackedConnection we are going to exit and wait
+		// If we have hijackedIOStreamer, we should notify
+		// hijackedIOStreamer we are going to exit and wait
 		// to avoid the terminal are not restored.
 		if attach {
 			cancelFun()
@@ -199,6 +212,11 @@ func runContainer(dockerCli *command.DockerCli, opts *runOptions, copts *contain
 
 	if errCh != nil {
 		if err := <-errCh; err != nil {
+			if _, ok := err.(term.EscapeError); ok {
+				// The user entered the detach escape sequence.
+				return nil
+			}
+
 			logrus.Debugf("Error hijack: %s", err)
 			return err
 		}
@@ -261,7 +279,17 @@ func attachContainer(
 	}
 
 	*errCh = promise.Go(func() error {
-		if errHijack := holdHijackedConnection(ctx, dockerCli, config.Tty, in, out, cerr, resp); errHijack != nil {
+		streamer := hijackedIOStreamer{
+			streams:      dockerCli,
+			inputStream:  in,
+			outputStream: out,
+			errorStream:  cerr,
+			resp:         resp,
+			tty:          config.Tty,
+			detachKeys:   options.DetachKeys,
+		}
+
+		if errHijack := streamer.stream(ctx); errHijack != nil {
 			return errHijack
 		}
 		return errAttach

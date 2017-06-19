@@ -20,6 +20,7 @@ import (
 type CommonAPIClient interface {
 	ConfigAPIClient
 	ContainerAPIClient
+	DistributionAPIClient
 	ImageAPIClient
 	NodeAPIClient
 	NetworkAPIClient
@@ -30,6 +31,7 @@ type CommonAPIClient interface {
 	SystemAPIClient
 	VolumeAPIClient
 	ClientVersion() string
+	DaemonHost() string
 	ServerVersion(ctx context.Context) (types.Version, error)
 	UpdateClientVersion(v string)
 }
@@ -63,10 +65,15 @@ type ContainerAPIClient interface {
 	ContainerTop(ctx context.Context, container string, arguments []string) (container.ContainerTopOKBody, error)
 	ContainerUnpause(ctx context.Context, container string) error
 	ContainerUpdate(ctx context.Context, container string, updateConfig container.UpdateConfig) (container.ContainerUpdateOKBody, error)
-	ContainerWait(ctx context.Context, container string) (int64, error)
+	ContainerWait(ctx context.Context, container string, condition container.WaitCondition) (<-chan container.ContainerWaitOKBody, <-chan error)
 	CopyFromContainer(ctx context.Context, container, srcPath string) (io.ReadCloser, types.ContainerPathStat, error)
 	CopyToContainer(ctx context.Context, container, path string, content io.Reader, options types.CopyToContainerOptions) error
 	ContainersPrune(ctx context.Context, pruneFilters filters.Args) (types.ContainersPruneReport, error)
+}
+
+// DistributionAPIClient defines API client methods for the registry
+type DistributionAPIClient interface {
+	DistributionInspect(ctx context.Context, image, encodedRegistryAuth string) (registry.DistributionInspect, error)
 }
 
 // ImageAPIClient defines API client methods for the images
@@ -92,8 +99,8 @@ type NetworkAPIClient interface {
 	NetworkConnect(ctx context.Context, networkID, container string, config *network.EndpointSettings) error
 	NetworkCreate(ctx context.Context, name string, options types.NetworkCreate) (types.NetworkCreateResponse, error)
 	NetworkDisconnect(ctx context.Context, networkID, container string, force bool) error
-	NetworkInspect(ctx context.Context, networkID string, verbose bool) (types.NetworkResource, error)
-	NetworkInspectWithRaw(ctx context.Context, networkID string, verbose bool) (types.NetworkResource, []byte, error)
+	NetworkInspect(ctx context.Context, networkID string, options types.NetworkInspectOptions) (types.NetworkResource, error)
+	NetworkInspectWithRaw(ctx context.Context, networkID string, options types.NetworkInspectOptions) (types.NetworkResource, []byte, error)
 	NetworkList(ctx context.Context, options types.NetworkListOptions) ([]types.NetworkResource, error)
 	NetworkRemove(ctx context.Context, networkID string) error
 	NetworksPrune(ctx context.Context, pruneFilter filters.Args) (types.NetworksPruneReport, error)

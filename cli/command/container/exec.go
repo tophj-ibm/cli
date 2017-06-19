@@ -33,7 +33,7 @@ func newExecOptions() *execOptions {
 }
 
 // NewExecCommand creates a new cobra.Command for `docker exec`
-func NewExecCommand(dockerCli *command.DockerCli) *cobra.Command {
+func NewExecCommand(dockerCli command.Cli) *cobra.Command {
 	options := newExecOptions()
 
 	cmd := &cobra.Command{
@@ -63,7 +63,7 @@ func NewExecCommand(dockerCli *command.DockerCli) *cobra.Command {
 }
 
 // nolint: gocyclo
-func runExec(dockerCli *command.DockerCli, options *execOptions, container string, execCmd []string) error {
+func runExec(dockerCli command.Cli, options *execOptions, container string, execCmd []string) error {
 	execConfig, err := parseExec(options, execCmd)
 	// just in case the ParseExec does not exit
 	if container == "" || err != nil {
@@ -146,7 +146,17 @@ func runExec(dockerCli *command.DockerCli, options *execOptions, container strin
 	}
 	defer resp.Close()
 	errCh = promise.Go(func() error {
-		return holdHijackedConnection(ctx, dockerCli, execConfig.Tty, in, out, stderr, resp)
+		streamer := hijackedIOStreamer{
+			streams:      dockerCli,
+			inputStream:  in,
+			outputStream: out,
+			errorStream:  stderr,
+			resp:         resp,
+			tty:          execConfig.Tty,
+			detachKeys:   execConfig.DetachKeys,
+		}
+
+		return streamer.stream(ctx)
 	})
 
 	if execConfig.Tty && dockerCli.In().IsTerminal() {

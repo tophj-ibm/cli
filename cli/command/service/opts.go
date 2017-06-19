@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/docker/cli/opts"
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
-	runconfigopts "github.com/docker/docker/runconfig/opts"
 	"github.com/docker/swarmkit/api"
 	"github.com/docker/swarmkit/api/defaults"
 	shlex "github.com/flynn-archive/go-shlex"
@@ -23,56 +23,6 @@ import (
 
 type int64Value interface {
 	Value() int64
-}
-
-// PositiveDurationOpt is an option type for time.Duration that uses a pointer.
-// It bahave similarly to DurationOpt but only allows positive duration values.
-type PositiveDurationOpt struct {
-	DurationOpt
-}
-
-// Set a new value on the option. Setting a negative duration value will cause
-// an error to be returned.
-func (d *PositiveDurationOpt) Set(s string) error {
-	err := d.DurationOpt.Set(s)
-	if err != nil {
-		return err
-	}
-	if *d.DurationOpt.value < 0 {
-		return errors.Errorf("duration cannot be negative")
-	}
-	return nil
-}
-
-// DurationOpt is an option type for time.Duration that uses a pointer. This
-// allows us to get nil values outside, instead of defaulting to 0
-type DurationOpt struct {
-	value *time.Duration
-}
-
-// Set a new value on the option
-func (d *DurationOpt) Set(s string) error {
-	v, err := time.ParseDuration(s)
-	d.value = &v
-	return err
-}
-
-// Type returns the type of this option, which will be displayed in `--help` output
-func (d *DurationOpt) Type() string {
-	return "duration"
-}
-
-// String returns a string repr of this option
-func (d *DurationOpt) String() string {
-	if d.value != nil {
-		return d.value.String()
-	}
-	return ""
-}
-
-// Value returns the time.Duration
-func (d *DurationOpt) Value() *time.Duration {
-	return d.value
 }
 
 // Uint64Opt represents a uint64.
@@ -293,9 +243,9 @@ func (r *resourceOptions) ToResourceRequirements() *swarm.ResourceRequirements {
 
 type restartPolicyOptions struct {
 	condition   string
-	delay       DurationOpt
+	delay       opts.DurationOpt
 	maxAttempts Uint64Opt
-	window      DurationOpt
+	window      opts.DurationOpt
 }
 
 func defaultRestartPolicy() *swarm.RestartPolicy {
@@ -396,17 +346,18 @@ func (c *credentialSpecOpt) Value() *swarm.CredentialSpec {
 	return c.value
 }
 
-func convertNetworks(ctx context.Context, apiClient client.NetworkAPIClient, networks []string) ([]swarm.NetworkAttachmentConfig, error) {
-	nets := []swarm.NetworkAttachmentConfig{}
-	for _, networkIDOrName := range networks {
-		network, err := apiClient.NetworkInspect(ctx, networkIDOrName, false)
+func convertNetworks(ctx context.Context, apiClient client.NetworkAPIClient, networks opts.NetworkOpt) ([]swarm.NetworkAttachmentConfig, error) {
+	var netAttach []swarm.NetworkAttachmentConfig
+	for _, net := range networks.Value() {
+		networkIDOrName := net.Target
+		_, err := apiClient.NetworkInspect(ctx, networkIDOrName, types.NetworkInspectOptions{Scope: "swarm"})
 		if err != nil {
 			return nil, err
 		}
-		nets = append(nets, swarm.NetworkAttachmentConfig{Target: network.ID})
+		netAttach = append(netAttach, swarm.NetworkAttachmentConfig{Target: net.Target, Aliases: net.Aliases, DriverOpts: net.DriverOpts})
 	}
-	sort.Sort(byNetworkTarget(nets))
-	return nets, nil
+	sort.Sort(byNetworkTarget(netAttach))
+	return netAttach, nil
 }
 
 type endpointOptions struct {
@@ -438,16 +389,16 @@ func (ldo *logDriverOptions) toLogDriver() *swarm.Driver {
 	// set the log driver only if specified.
 	return &swarm.Driver{
 		Name:    ldo.name,
-		Options: runconfigopts.ConvertKVStringsToMap(ldo.opts.GetAll()),
+		Options: opts.ConvertKVStringsToMap(ldo.opts.GetAll()),
 	}
 }
 
 type healthCheckOptions struct {
 	cmd           string
-	interval      PositiveDurationOpt
-	timeout       PositiveDurationOpt
+	interval      opts.PositiveDurationOpt
+	timeout       opts.PositiveDurationOpt
 	retries       int
-	startPeriod   PositiveDurationOpt
+	startPeriod   opts.PositiveDurationOpt
 	noHealthcheck bool
 }
 
@@ -529,7 +480,7 @@ type serviceOptions struct {
 	hosts           opts.ListOpts
 
 	resources resourceOptions
-	stopGrace DurationOpt
+	stopGrace opts.DurationOpt
 
 	replicas Uint64Opt
 	mode     string
@@ -539,10 +490,11 @@ type serviceOptions struct {
 	placementPrefs placementPrefOpts
 	update         updateOptions
 	rollback       updateOptions
-	networks       opts.ListOpts
+	networks       opts.NetworkOpt
 	endpoint       endpointOptions
 
-	registryAuth bool
+	registryAuth   bool
+	noResolveImage bool
 
 	logDriver logDriverOptions
 
@@ -564,40 +516,39 @@ func newServiceOptions() *serviceOptions {
 		dnsOption:       opts.NewListOpts(nil),
 		dnsSearch:       opts.NewListOpts(opts.ValidateDNSSearch),
 		hosts:           opts.NewListOpts(opts.ValidateExtraHost),
-		networks:        opts.NewListOpts(nil),
 	}
 }
 
-func (opts *serviceOptions) ToServiceMode() (swarm.ServiceMode, error) {
+func (options *serviceOptions) ToServiceMode() (swarm.ServiceMode, error) {
 	serviceMode := swarm.ServiceMode{}
-	switch opts.mode {
+	switch options.mode {
 	case "global":
-		if opts.replicas.Value() != nil {
+		if options.replicas.Value() != nil {
 			return serviceMode, errors.Errorf("replicas can only be used with replicated mode")
 		}
 
 		serviceMode.Global = &swarm.GlobalService{}
 	case "replicated":
 		serviceMode.Replicated = &swarm.ReplicatedService{
-			Replicas: opts.replicas.Value(),
+			Replicas: options.replicas.Value(),
 		}
 	default:
-		return serviceMode, errors.Errorf("Unknown mode: %s, only replicated and global supported", opts.mode)
+		return serviceMode, errors.Errorf("Unknown mode: %s, only replicated and global supported", options.mode)
 	}
 	return serviceMode, nil
 }
 
-func (opts *serviceOptions) ToStopGracePeriod(flags *pflag.FlagSet) *time.Duration {
+func (options *serviceOptions) ToStopGracePeriod(flags *pflag.FlagSet) *time.Duration {
 	if flags.Changed(flagStopGracePeriod) {
-		return opts.stopGrace.Value()
+		return options.stopGrace.Value()
 	}
 	return nil
 }
 
-func (opts *serviceOptions) ToService(ctx context.Context, apiClient client.NetworkAPIClient, flags *pflag.FlagSet) (swarm.ServiceSpec, error) {
+func (options *serviceOptions) ToService(ctx context.Context, apiClient client.NetworkAPIClient, flags *pflag.FlagSet) (swarm.ServiceSpec, error) {
 	var service swarm.ServiceSpec
 
-	envVariables, err := runconfigopts.ReadKVStrings(opts.envFile.GetAll(), opts.env.GetAll())
+	envVariables, err := opts.ReadKVStrings(options.envFile.GetAll(), options.env.GetAll())
 	if err != nil {
 		return service, err
 	}
@@ -616,68 +567,68 @@ func (opts *serviceOptions) ToService(ctx context.Context, apiClient client.Netw
 		currentEnv = append(currentEnv, env)
 	}
 
-	healthConfig, err := opts.healthcheck.toHealthConfig()
+	healthConfig, err := options.healthcheck.toHealthConfig()
 	if err != nil {
 		return service, err
 	}
 
-	serviceMode, err := opts.ToServiceMode()
+	serviceMode, err := options.ToServiceMode()
 	if err != nil {
 		return service, err
 	}
 
-	networks, err := convertNetworks(ctx, apiClient, opts.networks.GetAll())
+	networks, err := convertNetworks(ctx, apiClient, options.networks)
 	if err != nil {
 		return service, err
 	}
 
 	service = swarm.ServiceSpec{
 		Annotations: swarm.Annotations{
-			Name:   opts.name,
-			Labels: runconfigopts.ConvertKVStringsToMap(opts.labels.GetAll()),
+			Name:   options.name,
+			Labels: opts.ConvertKVStringsToMap(options.labels.GetAll()),
 		},
 		TaskTemplate: swarm.TaskSpec{
 			ContainerSpec: swarm.ContainerSpec{
-				Image:      opts.image,
-				Args:       opts.args,
-				Command:    opts.entrypoint.Value(),
+				Image:      options.image,
+				Args:       options.args,
+				Command:    options.entrypoint.Value(),
 				Env:        currentEnv,
-				Hostname:   opts.hostname,
-				Labels:     runconfigopts.ConvertKVStringsToMap(opts.containerLabels.GetAll()),
-				Dir:        opts.workdir,
-				User:       opts.user,
-				Groups:     opts.groups.GetAll(),
-				StopSignal: opts.stopSignal,
-				TTY:        opts.tty,
-				ReadOnly:   opts.readOnly,
-				Mounts:     opts.mounts.Value(),
+				Hostname:   options.hostname,
+				Labels:     opts.ConvertKVStringsToMap(options.containerLabels.GetAll()),
+				Dir:        options.workdir,
+				User:       options.user,
+				Groups:     options.groups.GetAll(),
+				StopSignal: options.stopSignal,
+				TTY:        options.tty,
+				ReadOnly:   options.readOnly,
+				Mounts:     options.mounts.Value(),
 				DNSConfig: &swarm.DNSConfig{
-					Nameservers: opts.dns.GetAll(),
-					Search:      opts.dnsSearch.GetAll(),
-					Options:     opts.dnsOption.GetAll(),
+					Nameservers: options.dns.GetAll(),
+					Search:      options.dnsSearch.GetAll(),
+					Options:     options.dnsOption.GetAll(),
 				},
-				Hosts:           convertExtraHostsToSwarmHosts(opts.hosts.GetAll()),
-				StopGracePeriod: opts.ToStopGracePeriod(flags),
+				Hosts:           convertExtraHostsToSwarmHosts(options.hosts.GetAll()),
+				StopGracePeriod: options.ToStopGracePeriod(flags),
 				Healthcheck:     healthConfig,
 			},
 			Networks:      networks,
-			Resources:     opts.resources.ToResourceRequirements(),
-			RestartPolicy: opts.restartPolicy.ToRestartPolicy(flags),
+			Resources:     options.resources.ToResourceRequirements(),
+			RestartPolicy: options.restartPolicy.ToRestartPolicy(flags),
 			Placement: &swarm.Placement{
-				Constraints: opts.constraints.GetAll(),
-				Preferences: opts.placementPrefs.prefs,
+				Constraints: options.constraints.GetAll(),
+				Preferences: options.placementPrefs.prefs,
 			},
-			LogDriver: opts.logDriver.toLogDriver(),
+			LogDriver: options.logDriver.toLogDriver(),
 		},
 		Mode:           serviceMode,
-		UpdateConfig:   opts.update.updateConfig(flags),
-		RollbackConfig: opts.update.rollbackConfig(flags),
-		EndpointSpec:   opts.endpoint.ToEndpointSpec(),
+		UpdateConfig:   options.update.updateConfig(flags),
+		RollbackConfig: options.update.rollbackConfig(flags),
+		EndpointSpec:   options.endpoint.ToEndpointSpec(),
 	}
 
-	if opts.credentialSpec.Value() != nil {
+	if options.credentialSpec.Value() != nil {
 		service.TaskTemplate.ContainerSpec.Privileges = &swarm.Privileges{
-			CredentialSpec: opts.credentialSpec.Value(),
+			CredentialSpec: options.credentialSpec.Value(),
 		}
 	}
 
@@ -797,6 +748,8 @@ func addServiceFlags(flags *pflag.FlagSet, opts *serviceOptions, defaultFlagValu
 	flags.StringVar(&opts.endpoint.mode, flagEndpointMode, defaultFlagValues.getString(flagEndpointMode), "Endpoint mode (vip or dnsrr)")
 
 	flags.BoolVar(&opts.registryAuth, flagRegistryAuth, false, "Send registry authentication details to swarm agents")
+	flags.BoolVar(&opts.noResolveImage, flagNoResolveImage, false, "Do not query the registry to resolve image digest and supported platforms")
+	flags.SetAnnotation(flagNoResolveImage, "version", []string{"1.30"})
 
 	flags.StringVar(&opts.logDriver.name, flagLogDriver, "", "Logging driver for service")
 	flags.Var(&opts.logDriver.opts, flagLogOpt, "Logging driver options")
@@ -899,6 +852,7 @@ const (
 	flagUser                    = "user"
 	flagWorkdir                 = "workdir"
 	flagRegistryAuth            = "with-registry-auth"
+	flagNoResolveImage          = "no-resolve-image"
 	flagLogDriver               = "log-driver"
 	flagLogOpt                  = "log-opt"
 	flagHealthCmd               = "health-cmd"

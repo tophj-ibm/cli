@@ -1,5 +1,5 @@
 
-FROM    golang:1.8.1
+FROM    golang:1.8.3
 
 # allow replacing httpredir or deb mirror
 ARG     APT_MIRROR=deb.debian.org
@@ -10,10 +10,6 @@ RUN     apt-get update -qq && apt-get install -y -q \
             gcc-mingw-w64 \
             parallel \
             ;
-
-RUN     go get github.com/mitchellh/gox && \
-        cp /go/bin/gox /usr/bin && \
-        rm -rf /go/src/* /go/pkg/* /go/bin/*
 
 COPY    dockerfiles/osx-cross.sh /tmp/
 RUN     /tmp/osx-cross.sh

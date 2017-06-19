@@ -8,6 +8,7 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/api/types/versions"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"golang.org/x/net/context"
@@ -55,13 +56,29 @@ func runRemove(dockerCli command.Cli, opts removeOptions) error {
 			return err
 		}
 
-		if len(services)+len(networks)+len(secrets) == 0 {
+		var configs []swarm.Config
+
+		version, err := client.ServerVersion(ctx)
+		if err != nil {
+			return err
+		}
+		if versions.LessThan(version.APIVersion, "1.30") {
+			fmt.Fprintf(dockerCli.Err(), `WARNING: ignoring "configs" (requires API version 1.30, but the Docker daemon API version is %s)`, version.APIVersion)
+		} else {
+			configs, err = getStackConfigs(ctx, client, namespace)
+			if err != nil {
+				return err
+			}
+		}
+
+		if len(services)+len(networks)+len(secrets)+len(configs) == 0 {
 			fmt.Fprintf(dockerCli.Out(), "Nothing found in stack: %s\n", namespace)
 			continue
 		}
 
 		hasError := removeServices(ctx, dockerCli, services)
 		hasError = removeSecrets(ctx, dockerCli, secrets) || hasError
+		hasError = removeConfigs(ctx, dockerCli, configs) || hasError
 		hasError = removeNetworks(ctx, dockerCli, networks) || hasError
 
 		if hasError {
@@ -115,6 +132,21 @@ func removeSecrets(
 		fmt.Fprintf(dockerCli.Err(), "Removing secret %s\n", secret.Spec.Name)
 		if err = dockerCli.Client().SecretRemove(ctx, secret.ID); err != nil {
 			fmt.Fprintf(dockerCli.Err(), "Failed to remove secret %s: %s", secret.ID, err)
+		}
+	}
+	return err != nil
+}
+
+func removeConfigs(
+	ctx context.Context,
+	dockerCli command.Cli,
+	configs []swarm.Config,
+) bool {
+	var err error
+	for _, config := range configs {
+		fmt.Fprintf(dockerCli.Err(), "Removing config %s\n", config.Spec.Name)
+		if err = dockerCli.Client().ConfigRemove(ctx, config.ID); err != nil {
+			fmt.Fprintf(dockerCli.Err(), "Failed to remove config %s: %s", config.ID, err)
 		}
 	}
 	return err != nil

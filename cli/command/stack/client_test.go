@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/docker/cli/cli/compose/convert"
+	"github.com/docker/docker/api"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
@@ -17,17 +18,28 @@ type fakeClient struct {
 	services []string
 	networks []string
 	secrets  []string
+	configs  []string
 
 	removedServices []string
 	removedNetworks []string
 	removedSecrets  []string
+	removedConfigs  []string
 
 	serviceListFunc   func(options types.ServiceListOptions) ([]swarm.Service, error)
 	networkListFunc   func(options types.NetworkListOptions) ([]types.NetworkResource, error)
 	secretListFunc    func(options types.SecretListOptions) ([]swarm.Secret, error)
+	configListFunc    func(options types.ConfigListOptions) ([]swarm.Config, error)
 	serviceRemoveFunc func(serviceID string) error
 	networkRemoveFunc func(networkID string) error
 	secretRemoveFunc  func(secretID string) error
+	configRemoveFunc  func(configID string) error
+}
+
+func (cli *fakeClient) ServerVersion(ctx context.Context) (types.Version, error) {
+	return types.Version{
+		Version:    "docker-dev",
+		APIVersion: api.DefaultVersion,
+	}, nil
 }
 
 func (cli *fakeClient) ServiceList(ctx context.Context, options types.ServiceListOptions) ([]swarm.Service, error) {
@@ -75,6 +87,21 @@ func (cli *fakeClient) SecretList(ctx context.Context, options types.SecretListO
 	return secretsList, nil
 }
 
+func (cli *fakeClient) ConfigList(ctx context.Context, options types.ConfigListOptions) ([]swarm.Config, error) {
+	if cli.configListFunc != nil {
+		return cli.configListFunc(options)
+	}
+
+	namespace := namespaceFromFilters(options.Filters)
+	configsList := []swarm.Config{}
+	for _, name := range cli.configs {
+		if belongToNamespace(name, namespace) {
+			configsList = append(configsList, configFromName(name))
+		}
+	}
+	return configsList, nil
+}
+
 func (cli *fakeClient) ServiceRemove(ctx context.Context, serviceID string) error {
 	if cli.serviceRemoveFunc != nil {
 		return cli.serviceRemoveFunc(serviceID)
@@ -102,6 +129,15 @@ func (cli *fakeClient) SecretRemove(ctx context.Context, secretID string) error 
 	return nil
 }
 
+func (cli *fakeClient) ConfigRemove(ctx context.Context, configID string) error {
+	if cli.configRemoveFunc != nil {
+		return cli.configRemoveFunc(configID)
+	}
+
+	cli.removedConfigs = append(cli.removedConfigs, configID)
+	return nil
+}
+
 func serviceFromName(name string) swarm.Service {
 	return swarm.Service{
 		ID: "ID-" + name,
@@ -122,6 +158,15 @@ func secretFromName(name string) swarm.Secret {
 	return swarm.Secret{
 		ID: "ID-" + name,
 		Spec: swarm.SecretSpec{
+			Annotations: swarm.Annotations{Name: name},
+		},
+	}
+}
+
+func configFromName(name string) swarm.Config {
+	return swarm.Config{
+		ID: "ID-" + name,
+		Spec: swarm.ConfigSpec{
 			Annotations: swarm.Annotations{Name: name},
 		},
 	}

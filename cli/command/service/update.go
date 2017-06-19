@@ -15,7 +15,6 @@ import (
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/client"
-	runconfigopts "github.com/docker/docker/runconfig/opts"
 	"github.com/docker/swarmkit/api/defaults"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -131,7 +130,7 @@ func runUpdate(dockerCli *command.DockerCli, flags *pflag.FlagSet, options *serv
 		// Rollback can't be combined with other flags.
 		otherFlagsPassed := false
 		flags.VisitAll(func(f *pflag.Flag) {
-			if f.Name == "rollback" {
+			if f.Name == "rollback" || f.Name == "detach" || f.Name == "quiet" {
 				return
 			}
 			if flags.Changed(f.Name) {
@@ -164,8 +163,11 @@ func runUpdate(dockerCli *command.DockerCli, flags *pflag.FlagSet, options *serv
 	}
 
 	if flags.Changed("image") {
-		if err := resolveServiceImageDigest(dockerCli, spec); err != nil {
+		if err := resolveServiceImageDigestContentTrust(dockerCli, spec); err != nil {
 			return err
+		}
+		if !options.noResolveImage && versions.GreaterThanOrEqualTo(apiClient.ClientVersion(), "1.30") {
+			updateOpts.QueryRegistry = true
 		}
 	}
 
@@ -253,7 +255,7 @@ func updateService(ctx context.Context, apiClient client.NetworkAPIClient, flags
 
 	updateDurationOpt := func(flag string, field **time.Duration) {
 		if flags.Changed(flag) {
-			val := *flags.Lookup(flag).Value.(*DurationOpt).Value()
+			val := *flags.Lookup(flag).Value.(*opts.DurationOpt).Value()
 			*field = &val
 		}
 	}
@@ -516,7 +518,7 @@ func updateContainerLabels(flags *pflag.FlagSet, field *map[string]string) {
 		}
 
 		values := flags.Lookup(flagContainerLabelAdd).Value.(*opts.ListOpts).GetAll()
-		for key, value := range runconfigopts.ConvertKVStringsToMap(values) {
+		for key, value := range opts.ConvertKVStringsToMap(values) {
 			(*field)[key] = value
 		}
 	}
@@ -536,7 +538,7 @@ func updateLabels(flags *pflag.FlagSet, field *map[string]string) {
 		}
 
 		values := flags.Lookup(flagLabelAdd).Value.(*opts.ListOpts).GetAll()
-		for key, value := range runconfigopts.ConvertKVStringsToMap(values) {
+		for key, value := range opts.ConvertKVStringsToMap(values) {
 			(*field)[key] = value
 		}
 	}
@@ -930,7 +932,7 @@ func updateLogDriver(flags *pflag.FlagSet, taskTemplate *swarm.TaskSpec) error {
 
 	taskTemplate.LogDriver = &swarm.Driver{
 		Name:    name,
-		Options: runconfigopts.ConvertKVStringsToMap(flags.Lookup(flagLogOpt).Value.(*opts.ListOpts).GetAll()),
+		Options: opts.ConvertKVStringsToMap(flags.Lookup(flagLogOpt).Value.(*opts.ListOpts).GetAll()),
 	}
 
 	return nil
@@ -960,15 +962,15 @@ func updateHealthcheck(flags *pflag.FlagSet, containerSpec *swarm.ContainerSpec)
 		containerSpec.Healthcheck.Test = nil
 	}
 	if flags.Changed(flagHealthInterval) {
-		val := *flags.Lookup(flagHealthInterval).Value.(*PositiveDurationOpt).Value()
+		val := *flags.Lookup(flagHealthInterval).Value.(*opts.PositiveDurationOpt).Value()
 		containerSpec.Healthcheck.Interval = val
 	}
 	if flags.Changed(flagHealthTimeout) {
-		val := *flags.Lookup(flagHealthTimeout).Value.(*PositiveDurationOpt).Value()
+		val := *flags.Lookup(flagHealthTimeout).Value.(*opts.PositiveDurationOpt).Value()
 		containerSpec.Healthcheck.Timeout = val
 	}
 	if flags.Changed(flagHealthStartPeriod) {
-		val := *flags.Lookup(flagHealthStartPeriod).Value.(*PositiveDurationOpt).Value()
+		val := *flags.Lookup(flagHealthStartPeriod).Value.(*opts.PositiveDurationOpt).Value()
 		containerSpec.Healthcheck.StartPeriod = val
 	}
 	if flags.Changed(flagHealthRetries) {
@@ -1006,7 +1008,7 @@ func updateNetworks(ctx context.Context, apiClient client.NetworkAPIClient, flag
 	toRemove := buildToRemoveSet(flags, flagNetworkRemove)
 	idsToRemove := make(map[string]struct{})
 	for networkIDOrName := range toRemove {
-		network, err := apiClient.NetworkInspect(ctx, networkIDOrName, false)
+		network, err := apiClient.NetworkInspect(ctx, networkIDOrName, types.NetworkInspectOptions{Scope: "swarm"})
 		if err != nil {
 			return err
 		}
@@ -1025,8 +1027,8 @@ func updateNetworks(ctx context.Context, apiClient client.NetworkAPIClient, flag
 	}
 
 	if flags.Changed(flagNetworkAdd) {
-		values := flags.Lookup(flagNetworkAdd).Value.(*opts.ListOpts).GetAll()
-		networks, err := convertNetworks(ctx, apiClient, values)
+		values := flags.Lookup(flagNetworkAdd).Value.(*opts.NetworkOpt)
+		networks, err := convertNetworks(ctx, apiClient, *values)
 		if err != nil {
 			return err
 		}
