@@ -13,13 +13,13 @@ import (
 	"github.com/docker/docker/registry"
 )
 
-type annotateOpts struct {
+type createOpts struct {
 	amend bool
 }
 
 func newCreateListCommand(dockerCli command.Cli) *cobra.Command {
 
-	opts := annotateOpts{}
+	opts := createOpts{}
 
 	cmd := &cobra.Command{
 		Use:   "create newRef manifest [manifest...]",
@@ -35,7 +35,7 @@ func newCreateListCommand(dockerCli command.Cli) *cobra.Command {
 	return cmd
 }
 
-func createManifestList(dockerCli command.Cli, args []string, opts annotateOpts) error {
+func createManifestList(dockerCli command.Cli, args []string, opts createOpts) error {
 
 	// Just do some basic verification here, and leave the rest for when the user pushes the list
 	newRef := args[0]
