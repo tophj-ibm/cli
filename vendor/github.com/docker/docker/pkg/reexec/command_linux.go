@@ -5,11 +5,8 @@ package reexec
 import (
 	"os/exec"
 	"syscall"
-<<<<<<< HEAD
 
 	"golang.org/x/sys/unix"
-=======
->>>>>>> re-run make vendor
 )
 
 // Self returns the path to the current process's binary.
@@ -27,11 +24,7 @@ func Command(args ...string) *exec.Cmd {
 		Path: Self(),
 		Args: args,
 		SysProcAttr: &syscall.SysProcAttr{
-<<<<<<< HEAD
 			Pdeathsig: unix.SIGTERM,
-=======
-			Pdeathsig: syscall.SIGTERM,
->>>>>>> re-run make vendor
 		},
 	}
 }
